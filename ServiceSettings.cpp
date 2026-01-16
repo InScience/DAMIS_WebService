@@ -128,15 +128,15 @@ bool ServiceSettings::initialize()
 	std::string ServiceSettings::pathToAlgorithmsExe = "\"D:/Povilas Data/My Documents/CodeBlocks/ClusterAlgorithms/bin/Release/ClusterAlgorithms.exe\"";
 //*/
 
-	std::string ServiceSettings::wsdlPath = "/users3/virginijus/www/Damis/apache/htdocs/Damis.wsdl";
+	std::string ServiceSettings::wsdlPath = "/usr/lib/cgi-bin/damis.wsdl";
 	
-	std::string ServiceSettings::pathToAlgorithmsExe = "/scratch/lustre/home/virginijus/exec/Algorithms/";
+	std::string ServiceSettings::pathToAlgorithmsExe ="/usr/lib/cgi-bin/Algorithms";
 	
-	std::string ServiceSettings::localDataFileSavePath = "/scratch/lustre/home/virginijus/data/";
+	std::string ServiceSettings::localDataFileSavePath = "/var/www/DAMIS-GUI/public/DamisData/";
 
-	std::string ServiceSettings::logingConfFilePath = "/scratch/lustre/home/virginijus/exec/DamisService/Logging.conf";
-	
-	std::string ServiceSettings::httpDataFileSavePath = "http://damis.lt:8087/data/";
+	std::string ServiceSettings::logingConfFilePath = "/usr/lib/cgi-bin/logging.conf";
+
+	std::string ServiceSettings::httpDataFileSavePath = "http://158.129.163.211/DamisData/";
 
 	std::string ServiceSettings::dataFileExtension = ".arff";
 
@@ -144,11 +144,11 @@ bool ServiceSettings::initialize()
 
 	int ServiceSettings::keepFilesInDirectory = 2*24*60*60;
 
-	int ServiceSettings::noOfProcessors = 128;
+	int ServiceSettings::noOfProcessors = 2;
 
-	int ServiceSettings::runDestination = 2;
+	int ServiceSettings::runDestination = 0;
 
-	std::string ServiceSettings::pathToMPIExecutable = "mpirun";
+	std::string ServiceSettings::pathToMPIExecutable = " ";
 
-	std::string ServiceSettings::workingDirMPI = "/scratch/lustre/home/virginijus/data/";
+	std::string ServiceSettings::workingDirMPI = "/var/www/DAMIS-GUI/public/DamisData/";
 
