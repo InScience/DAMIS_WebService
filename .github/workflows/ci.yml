@@ -1,0 +1,80 @@
+# Builds the DamisService image (docker/Dockerfile, which also builds the MPI algorithms of InScience/DAMIS
+# and runs their smoke test) and calls the running service over SOAP (scripts/soap-smoke-test.sh).
+#
+# InScience/DAMIS is checked out at the branch with the same name as the tested one when it exists there,
+# otherwise at its default branch; a manual run can name another ref. The whole application (GUI + service)
+# is tested by the CI of InScience/DAMIS-GUI.
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      damis_ref:
+        description: InScience/DAMIS branch, tag or commit (empty = automatic)
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  service:
+    name: Service image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: DAMIS_WebService
+
+      - name: Choose the DAMIS ref
+        id: refs
+        env:
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+          DAMIS_REF: ${{ inputs.damis_ref }}
+        run: |
+          if [ -n "$DAMIS_REF" ]; then ref=$DAMIS_REF
+          elif git ls-remote --exit-code --heads https://github.com/InScience/DAMIS.git "$BRANCH" > /dev/null; then ref=$BRANCH
+          else ref= # default branch
+          fi
+          echo "damis=$ref" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: InScience/DAMIS
+          ref: ${{ steps.refs.outputs.damis }}
+          path: DAMIS
+
+      - name: Build the image
+        working-directory: DAMIS_WebService
+        run: docker build -f docker/Dockerfile --build-context algorithms=../DAMIS -t damis-service:ci .
+
+      # the service downloads its input from a URL: serve the DAMIS sample datasets from the runner
+      - name: Start the service
+        run: |
+          nohup python3 -m http.server 8099 --bind 0.0.0.0 --directory DAMIS/arff_files > http-server.log 2>&1 &
+          docker run -d --name damis-service -p 8088:80 --add-host host.docker.internal:host-gateway \
+            -e SERVICE_URL=http://localhost:8088/cgi-bin/DamisService.cgi \
+            -e DATA_URL=http://localhost:8088/DamisData/ \
+            damis-service:ci
+          for _ in $(seq 30); do
+            if curl -sf -o /dev/null 'http://localhost:8088/cgi-bin/DamisService.cgi?wsdl'; then exit 0; fi
+            sleep 2
+          done
+          docker logs damis-service
+          exit 1
+
+      - name: SOAP smoke test
+        run: DAMIS_WebService/scripts/soap-smoke-test.sh http://localhost:8088/cgi-bin/DamisService.cgi http://host.docker.internal:8099/
+
+      - name: Logs
+        if: failure()
+        run: |
+          docker logs damis-service || true
+          docker exec damis-service sh -c 'tail -n 100 /var/log/damis/*' || true
+          cat http-server.log || true

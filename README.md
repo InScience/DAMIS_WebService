@@ -45,6 +45,16 @@ In the DAMIS-GUI repository `docker compose up -d` builds and starts it as the `
 Volumes: `/var/lib/damis/data` (inputs/results, failed runs are copied to `err/`), `/var/log/damis`
 (`damis-service.log`). **Do not expose the service publicly**: it downloads any URL given in `X`.
 
+Test
+----
+
+```sh
+scripts/soap-smoke-test.sh SERVICE_URL DATA_URL   # SOAP calls with curl; DATA_URL serves DAMIS arff_files/iris.arff
+```
+
+GitHub Actions (`.github/workflows/ci.yml`) build the image with InScience/DAMIS (the branch of the same name
+when it exists, otherwise the default branch) and run this test against it on every push and pull request.
+
 Build without Docker
 --------------------
 
@@ -81,5 +91,7 @@ Changes in 2026
   ARFF file crashed the CGI (HTTP 500); undefined behaviour in `strToInt`/`strToDouble`; logging could go
   to stdout (= the SOAP response) before `logging.conf` was loaded; `HOME` is set for `mpirun` (Apache
   starts CGIs without it).
+- An input download answered with an HTTP error (status >= 400) is a fault naming the status; before, only
+  pages containing "404 Not Found" were recognised and any other error page was parsed as the dataset.
 - Removed: vendored curl/OpenSSL 0.9.8/Windows libraries and executables, stale Windows sources
   (`DamisService.cpp`, `InitDamisServiceFile.cpp`), `CGIvars/`, the committed gSOAP code.
