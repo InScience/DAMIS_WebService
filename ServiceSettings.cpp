@@ -47,7 +47,7 @@ bool ServiceSettings::initialize()
     oFile+="settings.csv";
     std::string line_from_file;
     std::string tmp1, tmp2, tmp3;
-    int line_no;
+    int line_no = 1;
 
     std::ifstream file(oFile);
 
@@ -63,14 +63,18 @@ bool ServiceSettings::initialize()
             std::istringstream iss(line_from_file);
             std::string sub;
             iss >> sub;
-            if (sub == "%")
+            if (sub.empty() || sub[0] == '%' || sub[0] == '#')
             {
                 line_no++;
                 continue;
             }
             else
             {
-              iss >> tmp1;
+                // the value is the rest of the line (mpiOptions contains spaces), trimmed
+                tmp1.clear();
+                std::getline(iss >> std::ws, tmp1);
+                tmp1.erase(tmp1.find_last_not_of(" \t\r") + 1);
+
                 if (sub == "wsdlPath")
                     ServiceSettings::wsdlPath = tmp1;
                 else if (sub == "logingConfFilePath")
@@ -89,10 +93,12 @@ bool ServiceSettings::initialize()
                     ServiceSettings::keepFilesInDirectory  = HelperMethods::strToInt(tmp1);
                 else if (sub == "noOfProcessors")
                     ServiceSettings::noOfProcessors  = HelperMethods::strToInt(tmp1);
-                else if (sub == "runDestination")
-                    ServiceSettings::runDestination  = HelperMethods::strToInt(tmp1);
                 else if (sub == "pathToMPIExecutable")
                     ServiceSettings::pathToMPIExecutable  = tmp1;
+                else if (sub == "mpiOptions")
+                    ServiceSettings::mpiOptions  = tmp1;
+                else if (sub == "maxRunTime")
+                    ServiceSettings::maxRunTime  = HelperMethods::strToInt(tmp1);
                 else if (sub == "workingDirMPI")
                     ServiceSettings::workingDirMPI  = tmp1;
             }
@@ -112,31 +118,18 @@ bool ServiceSettings::initialize()
 
 }
 
-//Debug DAMIS
-	//std::string ServiceSettings::wsdlPath = "C:/inetpub/wwwroot/Damis/TestDamis.wsdl";
-	//std::string ServiceSettings::wsdlPath = "/var/www/damis/TestDamis.wsdl";
-	//std::string ServiceSettings::logingConfFilePath = "C:/inetpub/wwwroot/Damis/cgi-bin/testlogging.conf";
-	//std::string ServiceSettings::logingConfFilePath ="/var/www/damis/cgi-bin/TestLogging.conf";
-    //std::string ServiceSettings::pathToAlgorithmsExe = "\"D:/Povilas Data/My Documents/CodeBlocks/ClusterAlgorithms/bin/Debug/ClusterAlgorithms.exe\"";
-    //std::string ServiceSettings::pathToAlgorithmsExe = "/Home/Povilas/Documents/C++/Algorithms/bin/Debug/Algorithms";
+// Defaults (the Docker image layout). Every value can be overridden in settings.csv,
+// which the container entrypoint generates from environment variables.
 
-//*/
+	std::string ServiceSettings::wsdlPath = "/etc/damis/damis.wsdl";
 
-//Release DAMIS
-/*	std::string ServiceSettings::wsdlPath = "C:/inetpub/wwwroot/Damis/Damis.wsdl";
-//	std::string ServiceSettings::logingConfFilePath = "C:/inetpub/wwwroot/Damis/cgi-bin/logging.conf";
-	std::string ServiceSettings::pathToAlgorithmsExe = "\"D:/Povilas Data/My Documents/CodeBlocks/ClusterAlgorithms/bin/Release/ClusterAlgorithms.exe\"";
-//*/
+	std::string ServiceSettings::pathToAlgorithmsExe = "/opt/damis/bin/Algorithms";
 
-	std::string ServiceSettings::wsdlPath = "/usr/lib/cgi-bin/damis.wsdl";
-	
-	std::string ServiceSettings::pathToAlgorithmsExe ="/usr/lib/cgi-bin/Algorithms";
-	
-	std::string ServiceSettings::localDataFileSavePath = "/var/www/DAMIS-GUI/public/DamisData/";
+	std::string ServiceSettings::localDataFileSavePath = "/var/lib/damis/data/";
 
-	std::string ServiceSettings::logingConfFilePath = "/usr/lib/cgi-bin/logging.conf";
+	std::string ServiceSettings::logingConfFilePath = "/etc/damis/logging.conf";
 
-	std::string ServiceSettings::httpDataFileSavePath = "http://158.129.163.211/DamisData/";
+	std::string ServiceSettings::httpDataFileSavePath = "http://localhost/DamisData/";
 
 	std::string ServiceSettings::dataFileExtension = ".arff";
 
@@ -146,9 +139,11 @@ bool ServiceSettings::initialize()
 
 	int ServiceSettings::noOfProcessors = 2;
 
-	int ServiceSettings::runDestination = 0;
+	std::string ServiceSettings::pathToMPIExecutable = "mpirun";
 
-	std::string ServiceSettings::pathToMPIExecutable = " ";
+	std::string ServiceSettings::mpiOptions = "--oversubscribe --bind-to none";
 
-	std::string ServiceSettings::workingDirMPI = "/var/www/DAMIS-GUI/public/DamisData/";
+	int ServiceSettings::maxRunTime = 3300;
+
+	std::string ServiceSettings::workingDirMPI = "/var/lib/damis/data/";
 

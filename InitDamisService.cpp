@@ -14,7 +14,7 @@
 #include "logging/easylogging++.h"
 #include "ErrorResponse.h"
 #include "ServiceSettings.h"
-#include "curl/curl.h"
+#include <curl/curl.h>
 #include "HelperMethods.h"
 
 

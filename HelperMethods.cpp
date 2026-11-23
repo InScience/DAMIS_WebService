@@ -15,10 +15,16 @@
 #include "logging/easylogging++.h"
 
 #include <dirent.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <time.h>
 #include <string>
+#include <cstring>
 #include <numeric>
 #include <cmath>
+#include <chrono>
+#include <random>
+#include <algorithm>
 
 const char* HelperMethods::alphanum= "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
@@ -33,7 +39,7 @@ HelperMethods::~HelperMethods(){
 
 double HelperMethods::getAttributeValue(std::string statFile, std::string attName)
 {
-double retVal;
+double retVal = 0.0; // was uninitialised: a missing stat file returned garbage (e.g. 9.27e-310)
 std::string attribute = attName;
 std::vector<std::string> tmp;
 tmp.reserve(0);
@@ -107,29 +113,36 @@ std::string HelperMethods::generateFileName(std::string preffix, bool addExtensi
 {
 
     LOG(INFO) << "Starting file name generation with the preffix: " << preffix;
-    time_t t;
-    time(&t);
-    srand((unsigned int)(t+rand()));
+
+    // std::random_device instead of srand(time): requests served in the same second used to get
+    // identical file names and overwrite each other's input/output files
+    static std::random_device rd;
+    static std::mt19937 gen(rd() ^ (static_cast<unsigned int>(getpid()) << 16));
+    std::uniform_int_distribution<size_t> pick(0, strlen(HelperMethods::alphanum) - 1);
+
     std::string catString;
     catString.assign(preffix);
 
     int i;
     int qty = catString.length() + ServiceSettings::lenghtOfTmpFileName;
     for ( i = catString.length(); i < qty; ++i)
-        catString += (HelperMethods::alphanum[rand() % (strlen(HelperMethods::alphanum) - 1)]);
+        catString += HelperMethods::alphanum[pick(gen)];
 
     if (addExtension)
         catString += ServiceSettings::dataFileExtension;
 
-    if (catString.empty())
-    {
-        LOG(ERROR) << "Unable to generate file name";
-        return NULL;
-    }
-
     LOG(INFO) << "Generated file name: " << catString;
 
     return  catString;
+}
+
+/**
+ * Seconds since an arbitrary fixed point (monotonic wall clock), for request durations.
+ * clock() used before measures CPU time of this process only, not the time spent waiting for mpirun.
+ */
+double HelperMethods::wallTime()
+{
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
 
@@ -196,162 +209,6 @@ int HelperMethods::deleteFile(std::string path)
 return 0;
 }
 
-/**
- * Convert a two-char hex string into the char it represents.
- */
-char HelperMethods::x2c(char* what)
-{
-    register char digit;
-
-    digit = (what[0] >= 'A' ? ((what[0] & 0xdf) - 'A')+10 : (what[0] - '0'));
-    digit *= 16;
-    digit += (what[1] >= 'A' ? ((what[1] & 0xdf) - 'A')+10 : (what[1] - '0'));
-    return(digit);
-}
-
-/**
- * Reduce any %xx escape sequences to the characters they represent.
- */
-void HelperMethods::unescape_url(char* url){
-register int i,j;
-
-    for(i=0,j=0; url[j]; ++i,++j)
-    {
-        if((url[i] = url[j]) == '%')
-        {
-            url[i] = HelperMethods::x2c(&url[j+1]) ;
-            j+= 2 ;
-        }
-    }
-    url[i] = '\0' ;
-}
-
-/**
- * Helper method that adds temination symbol to the end of the string
- */
-char *HelperMethods::strdup(const char* s){
-
-    char *d = (char *) malloc (strlen (s) + 1);   // Space for length plus nul
-    if (d == NULL) return NULL;          // No memory
-    strcpy (d,s);                        // Copy the characters
-    return d;                            // Return the new string
-}
-
-
-/**
- * Read the CGI input and place all name/val pairs into list.
- * Returns list containing name1, value1, name2, value2, ... , NULL
- */
-char **HelperMethods::getcgivars(){
-
-    register int i ;
-    char *request_method = NULL ;
-    int content_length;
-    char *cgiinput = NULL ;
-    char **cgivars ;
-    char **pairlist ;
-    int paircount ;
-    char *nvpair ;
-    char *eqpos ;
-
-    /** Depending on the request method, read all CGI input into cgiinput. **/
-    request_method= getenv("REQUEST_METHOD");
-    if (request_method == NULL)
-        return NULL;
-    /*char *qs ;
-    qs= getenv("QUERY_STRING") ;*/
-
-    if (!strcmp(request_method, "GET") || !strcmp(request_method, "HEAD") )
-    {
-        /* Some servers apparently don't provide QUERY_STRING if it's empty, */
-        /*   so avoid strdup()'ing a NULL pointer here.                      */
-        char *qs ;
-        qs= getenv("QUERY_STRING") ;
-        cgiinput= HelperMethods::strdup(qs  ? qs  : "") ;
-    }
-    else if (!strcmp(request_method, "POST"))
-    {
-        /* strcasecmp() is not supported in Windows-- use strcmpi() instead */
-        if ( strcmp(getenv("CONTENT_TYPE"), "application/x-www-form-urlencoded"))
-        {
-            printf("Content-Type: text/plain\n\n") ;
-            printf("getcgivars(): Unsupported Content-Type.\n") ;
-            //    exit(1) ;
-            return NULL;
-        }
-        if ( !(content_length = atoi(getenv("CONTENT_LENGTH"))) )
-        {
-            printf("Content-Type: text/plain\n\n") ;
-            printf("getcgivars(): No Content-Length was sent with the POST request.\n") ;
-            // exit(1) ;
-            return NULL;
-        }
-        if ( !(cgiinput= (char *) malloc(content_length+1)) )
-        {
-            printf("Content-Type: text/plain\n\n") ;
-            printf("getcgivars(): Couldn't malloc for cgiinput.\n") ;
-            //  exit(1) ;
-            return NULL;
-        }
-        if (!fread(cgiinput, content_length, 1, stdin))
-        {
-            printf("Content-Type: text/plain\n\n") ;
-            printf("getcgivars(): Couldn't read CGI input from STDIN.\n") ;
-            // exit(1) ;
-            return NULL;
-        }
-        cgiinput[content_length]='\0' ;
-    }
-    else
-    {
-        printf("Content-Type: text/plain\n\n") ;
-        printf("getcgivars(): Unsupported REQUEST_METHOD.\n") ;
-        exit(1) ;
-    }
-
-    /** Change all plusses back to spaces. **/
-    for (i=0; cgiinput[i]; i++) if (cgiinput[i] == '+') cgiinput[i] = ' ' ;
-
-    /** First, split on "&" and ";" to extract the name-value pairs into **/
-    /**   pairlist.                                                      **/
-    pairlist= (char **) malloc(256*sizeof(char **)) ;
-    paircount= 0 ;
-    nvpair= strtok(cgiinput, "&;") ;
-    while (nvpair)
-    {
-        pairlist[paircount++]= strdup(nvpair) ;
-        if (!(paircount%256))
-            pairlist= (char **) realloc(pairlist,(paircount+256)*sizeof(char **)) ;
-        nvpair= strtok(NULL, "&;") ;
-    }
-    pairlist[paircount]= 0 ;    /* terminate the list with NULL */
-
-    /** Then, from the list of pairs, extract the names and values. **/
-    cgivars= (char **) malloc((paircount*2+1)*sizeof(char **)) ;
-    for (i= 0; i<paircount; i++)
-    {
-        if ((eqpos=strchr(pairlist[i], '=')))
-        {
-            *eqpos= '\0' ;
-            HelperMethods::unescape_url(cgivars[i*2+1]= strdup(eqpos+1)) ;
-        }
-        else
-        {
-            HelperMethods::unescape_url(cgivars[i*2+1]= strdup("")) ;
-        }
-        HelperMethods::unescape_url(cgivars[i*2]= strdup(pairlist[i])) ;
-    }
-    cgivars[paircount*2]= 0 ;   /* terminate the list with NULL */
-
-    /** Free anything that needs to be freed. **/
-    free(cgiinput) ;
-    for (i=0; pairlist[i]; i++) free(pairlist[i]) ;
-    free(pairlist) ;
-
-    /** Return the list of name-value strings. **/
-    return cgivars ;
-}
-
 std::vector<std::string> HelperMethods::split(const std::string& s, char delim, std::vector<std::string> &elems)
 {
     std::stringstream ss(s);
@@ -372,13 +229,15 @@ std::vector<std::string> HelperMethods::split(const std::string& s, char delim)
 
 int HelperMethods::getRrandomInRange(unsigned int min, unsigned int max)
 {
-  int x, randMax = RAND_MAX - RAND_MAX % max;
-
-int p=RAND_MAX+1;
-while(p>randMax)
-        p=rand();
-x= min + p%(max - min);
-return x;
+    // rejection sampling; was: int p = RAND_MAX+1 (int overflow) which skipped the loop and
+    // always returned the same "random" index, so SPLITDATA reshuffling was not random
+    int x, randMax = RAND_MAX - RAND_MAX % max;
+    int p;
+    do
+        p = rand();
+    while (p >= randMax);
+    x = min + p % (max - min);
+    return x;
 }
 
 double HelperMethods::getMean(std::vector<double> dataVector)
@@ -389,7 +248,8 @@ double HelperMethods::getMean(std::vector<double> dataVector)
 double HelperMethods::getStd(std::vector<double> dataVector)
 {
     std::vector<double> diff(dataVector.size());
-    std::transform(dataVector.begin(), dataVector.end(), diff.begin(), std::bind2nd(std::minus<double>(), HelperMethods::getMean(dataVector)));
+    const double mean = HelperMethods::getMean(dataVector);
+    std::transform(dataVector.begin(), dataVector.end(), diff.begin(), [mean](double v) { return v - mean; });
     double sq_sum = std::inner_product(diff.begin(), diff.end(), diff.begin(), 0.0);
     return std::sqrt(sq_sum / dataVector.size()); //daliname is N o ne is N-1
 }
@@ -403,6 +263,7 @@ double HelperMethods::strToDouble(std::string cmdParam)
     {
         return atof(cmdParam.c_str());
     }
+    return 0.0; // used to fall off the end (undefined behaviour)
 }
 
 int HelperMethods::strToInt(std::string cmdParam)
@@ -414,6 +275,7 @@ int HelperMethods::strToInt(std::string cmdParam)
     {
         return atoi(cmdParam.c_str());
     }
+    return 0; // used to fall off the end (undefined behaviour)
 }
 
 // copy in binary mode

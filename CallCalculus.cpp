@@ -13,701 +13,231 @@
 #include "ServiceSettings.h"
 #include "ServeRequest.h"
 #include "HelperMethods.h"
-#include "logging/easylogging++.h"
-#include <iostream>
-//#include <windows.h>
-//#include <tchar.h>
-#include <unistd.h>
-#include <wait.h>
 #include "ErrorResponse.h"
+#include "logging/easylogging++.h"
+
+#include <cerrno>
+#include <chrono>
+#include <csignal>
+#include <cstring>
+#include <deque>
+#include <fstream>
+#include <sstream>
+#include <thread>
+
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 CallCalculus::CallCalculus(int p, int maxCalcTime, InitDamisService* initFile):ServeRequest(initFile)
 {
-
     this->reqProcessors = p;
-    this->maxCalculationTime = maxCalcTime; // not used if qsub is not called
+    this->maxCalculationTime = maxCalcTime; // informative only, the run is limited by ServiceSettings::maxRunTime
 }
-
 
 CallCalculus::~CallCalculus()
 {
 
 }
 
-
 /**
- * Implements run of the algorithm
+ * Implements run of the algorithm.
+ *
+ * The VU MIF (SLURM sbatch) and MII (Grid Engine qsub) cluster submission that used to be here was
+ * removed in 2026: the algorithms now run on the service host itself with mpirun.
  */
 void CallCalculus::run()
 {
     // create file for service calculations
-    DamisFile *cFile = new DamisFile ("_forCalculus_");  // temporary data file that will be passed to cluster
-    //DamisFile *algStat = new DamisFile ("_algRunStat_"); //temporary data file that hold data statistitics abaut algorithm run
-    //variable ir ->>>>>statFile
+    DamisFile *cFile = new DamisFile ("_forCalculus_");  // temporary data file that will be passed to the algorithm
 
-    // std::vector<std::string> dummy;
-    // dummy.reserve(0); //pass dummy vector to write function since no class attribute after  are left
     // save data to temporary file
     writeDataToFile(cFile->getFilePath(), prepareDataSection(serveFile->getDoubleData(), serveFile->getStringClass()), prepareAttributeSection(serveFile->getAttributeName(),serveFile->getAttributeType(), serveFile->getStringClassAttribute()));
 
-    std::string callCalc;
+    // mpirun [mpiOptions] -np p Algorithms <exeParams> -i input -o result -s stat (argument vector, no shell)
+    std::vector<std::string> args;
+    std::string token;
+    args.push_back(ServiceSettings::pathToMPIExecutable);
+    std::istringstream mpiOptions(ServiceSettings::mpiOptions);
+    while (mpiOptions >> token)
+        args.push_back(token);
+    args.push_back("-np");
+    args.push_back(std::to_string(reqProcessors > 0 ? reqProcessors : 1));
+    args.push_back(ServiceSettings::pathToAlgorithmsExe);
+    std::istringstream algorithmParams(exeParams);
+    while (algorithmParams >> token)
+        args.push_back(token);
+    args.push_back("-i");
+    args.push_back(cFile->getFilePath());
+    args.push_back("-o");
+    args.push_back(outFile->getFilePath());
+    args.push_back("-s");
+    args.push_back(statFile->getFilePath());
 
+    std::string commandLine;
+    for (size_t i = 0; i < args.size(); i++)
+        commandLine += (i ? " " : "") + args[i];
 
-    if (ServiceSettings::runDestination == 1) //run on MII cluster
+    std::string runName = HelperMethods::generateFileName("", false);
+    std::string runLog = ServiceSettings::workingDirMPI + "_run_" + runName + ".log";
+
+    LOG(INFO) << "Running algorithm: " << commandLine;
+    LOG(INFO) << "Algorithm output goes to " << runLog << ", time limit " << ServiceSettings::maxRunTime << " s (client maxCalcTime " << maxCalculationTime << " s)";
+
+    int exitCode = -1;
+    bool timedOut = false;
+    double start = HelperMethods::wallTime();
+    bool started = runProcess(args, ServiceSettings::workingDirMPI, runLog, ServiceSettings::maxRunTime, exitCode, timedOut);
+    LOG(INFO) << "Algorithm process finished with exit code " << exitCode << " after " << (HelperMethods::wallTime() - start) << " s";
+
+    if (!started)
     {
-
-
-        //LOG(INFO) << "CALL: " << exeParams;
-        //LOG(INFO)
-
-        ///Implementation for windows run
-        //    std::string callCalc = ServiceSettings::pathToMPIExecutable + " -n " + std::to_string(reqProcessors) + " -wdir " + ServiceSettings::workingDirMPI + " " + ServiceSettings::pathToAlgorithmsExe + exeParams + " -i " +cFile->getFilePath() + " " + " -o " + outFile->getFilePath() + " " + " -s " + statFile->getFilePath();
-
-        /* STARTUPINFO si = { sizeof(si) };
-         PROCESS_INFORMATION  pi;
-         std::vector<TCHAR> V( callCalc.length() + 1);
-         for (int i=0;i< (int) callCalc.length();i++)
-             V[i] = callCalc[i];
-
-         CreateProcess(NULL, &V[0],0, 0, FALSE, 0, 0, 0, &si, &pi);
-         WaitForSingleObject(pi.hProcess, INFINITE);
-         CloseHandle(pi.hProcess);
-         CloseHandle(pi.hThread);*/
-        ///Implementation for linux run
-     //   char * tmpNoOfProc = const_cast<char*>(std::to_string(static_cast<long long>(reqProcessors)).c_str());
-        //creating bash script with the parameters
-        callCalc = ServiceSettings::pathToMPIExecutable + " -np " + std::to_string( static_cast<long long> (reqProcessors)) + " -wdir " + ServiceSettings::workingDirMPI + " " + ServiceSettings::pathToAlgorithmsExe + exeParams + " -i " +cFile->getFilePath() + " -o " + outFile->getFilePath() + " -s " + statFile->getFilePath();
-
-        std::string fileName = HelperMethods::generateFileName("", false);
-        std::string bashFile = ServiceSettings::workingDirMPI + "_bash_" + fileName + ".sh";
-        std::string qsubOut = ServiceSettings::workingDirMPI + "_qsubOut_log_" + fileName + ".txt";
-        std::string qsubOutO = ServiceSettings::workingDirMPI + "_qsubOut_log_Out_" + fileName + ".txt";
-        std::string qsubOutE = ServiceSettings::workingDirMPI + "_qsubOut_log_Err_" + fileName + ".txt";
-        std::string bashFileUpper = ServiceSettings::workingDirMPI + "_bash_run_" + fileName + ".sh";
-
-        std::ofstream file(bashFile.c_str());
-
-        file << "#!/bin/bash"<<std::endl;
-        file<<"#"<<std::endl;
-        file<<"#$ -j y"<<std::endl;
-        file<<"#$ -o "<< qsubOutO << std::endl;
-        file<<"#$ -e "<< qsubOutE << std::endl;
-        file << "#$ -pe orte " << std::to_string( static_cast<long long> (reqProcessors)) << std::endl;
-        file<<callCalc<<std::endl;
-        file.close();
-
-        std::ofstream fileUpper(bashFileUpper.c_str());
-        fileUpper <<"export SGE_ROOT=/opt/gridengine"<<std::endl;
-        fileUpper <<"export SGE_CELL=default"<<std::endl;
-        fileUpper <<"export SGE_QMASTER_PORT=536"<<std::endl;
-        fileUpper <<"export SGE_EXECD_PORT=537"<<std::endl;
-        fileUpper <<"/opt/gridengine/bin/linux-x64/qsub "<< bashFile  << " > " <<qsubOut << std::endl;
-        fileUpper.close();
-
-        char * tmpBashFileUpper = const_cast<char*>(bashFileUpper.c_str());
-        std::string laikUpper = "chmod 707 " + bashFileUpper;
-        char * commandUpper =  const_cast<char*>(laikUpper.c_str());
-        system (commandUpper);
-
-        char* argList[] =
-        {
-            tmpBashFileUpper,
-            NULL /*       The argument list must end with a NULL.*/
-        };
-
-        /* Spawn a child process running the "ls" command. Ignore the
-           returned child process ID.  */
-        LOG(INFO) << "Submiting job to qsub" << tmpBashFileUpper;
-        spawn (tmpBashFileUpper, argList);
-
-        //check qsub output if it has submitted then wait for calculus tu finish else return error codes as damis error
-       //
-            std::ifstream oFile(qsubOut);
-            std::string line_from_file;
-       // bool jobKilled = false;
-
-            if (oFile.good())
-            {
-                std::getline(oFile, line_from_file);
-                oFile.close();
-
-                std::size_t foundJob = line_from_file.find("Your job ");
-
-                if (foundJob!=std::string::npos)
-                {
-                    //find job id
-                    std::size_t foundJobIDStart = line_from_file.find_first_of("0123456789");
-                    std::size_t foundJobIDEnd  = line_from_file.find(" ", foundJobIDStart + 1);
-                    std::string jobID = line_from_file.substr(foundJobIDStart, foundJobIDEnd - foundJobIDStart);
-                    LOG(INFO) << "Job ID is " << jobID;
-
-                   /* std::string runCommand = "qstat -j " + jobID + " 2>&-"; //force only stderr to null
-                    char * command = const_cast<char*>(runCommand.c_str());
-
-                    std::string qstatus = "";
-                    do
-                    {
-                        system("sleep 10");
-                        qstatus = getOutput(command);
-                        if (qstatus == "ERR")
-                        {
-                            LOG(ERROR) << "Error getting pipe to "<< runCommand << " killing job";
-                            ErrorResponse::setFaultDetail("Error job status monitoring, killing job");
-                            //error getting pipe
-                            runCommand = "qdel " + jobID + " &>/dev/null"; //forse all output to null
-                            command = const_cast<char*>(runCommand.c_str());
-                            system (command);
-                            break;
-                        }
-                    }
-                    while (qstatus!=""); // indicates that the job has been finished*/
-
-                    bool stopChecking = false;
-					std::string oF = outFile->getFilePath();
-					std::string sF = statFile->getFilePath();
-
-					do
-					{
-						system ("sleep 5");
-						//checking if there are these files
-						std::ifstream calcFile(oF.c_str());  //output from algorithms
-						std::ifstream statFile(sF.c_str()); //statistics from the calculus
-						std::ifstream qsubError(qsubOutE);
-						std::ifstream qsublogOut(qsubOutO); //May occur errors from the Algorithms
-
-						if (qsubError)
-						{
-							std::streampos current = qsubError.tellg();
-							qsubError.seekg (0, qsubError.end);
-							bool empty = !qsubError.tellg(); // true if empty file
-							qsubError.seekg (current, qsubError.beg); //restore stream position
-
-							if (!empty) //checking if the file is not empty
-							{
-								LOG(ERROR) << "Error while invoking calculus. Error file " << qsubOutE << " has been created with content. Returning content of the file.";
-								ErrorResponse::setFaultDetail("Error while invoking calculus. Token:");
-								ErrorResponse::setFaultDetail(fileName);
-
-								//std::ifstream qsublogOut(qsubOutO);
-
-								while (std::getline(qsubError, line_from_file))
-								{
-									ErrorResponse::setFaultDetail(line_from_file);
-								}
-								stopChecking = true;
-
-								qsublogOut.close();
-							}
-							/*else if (empty && calcFile && statFile)
-							{
-								stopChecking = true;
-							}*/
-							else
-							{
-								ErrorResponse::setFaultDetail("Got unknown error while trying to mpirun Algorithms");
-							}
-						}
-						if (qsublogOut)
-                        {
-                            qsublogOut.close();
-                            std::ifstream qsublogOut(qsubOutO, std::ifstream::ate | std::ifstream::binary);
-                            int fSize = qsublogOut.tellg();
-                            qsublogOut.close();
-
-                            if (fSize > 84) //if size greater than 84 means that there is more thant two lines and mpirun produced error starting from the third line
-                            {
-                                LOG(ERROR) << "Error while performing calculus. Error file " << qsubOutO << " size indicates error. Returning content of the file.";
-								ErrorResponse::setFaultDetail("Error while performing calculus. Token:");
-                                ErrorResponse::setFaultDetail(fileName);
-
-                                std::ifstream qsublogOut(qsubOutO);
-								//first two lines are standard, thus skip it
-								std::getline(qsublogOut, line_from_file);
-								std::getline(qsublogOut, line_from_file);
-
-								while (std::getline(qsublogOut, line_from_file))
-								{
-									ErrorResponse::setFaultDetail(line_from_file);
-								}
-                                stopChecking = true;
-                            }
-                        }
-						if (calcFile && statFile)
-                            stopChecking = true;
-
-					calcFile.close();
-					statFile.close();
-					qsubError.close();
-					qsublogOut.close();
-					}
-					while (!stopChecking);
-
-                    //chek if error file has been created if so return its content otherwise return links to result files
-                  /*  std::ifstream outFileE(qsubOutE);
-                   // LOG(INFO) << "Cheking if " << jobID << " generated error file";
-                    if (outFileE.good())
-                    {
-                        LOG(ERROR) << "Error file "<< qsubOutE << " generated, returning error to the client";
-                        ErrorResponse::setFaultDetail("Error runnig algorithm");
-                        while (std::getline(outFileE, line_from_file))
-                        {
-                            ErrorResponse::setFaultDetail(line_from_file);
-                        }
-                      // parse content of the file qsubOutE to error strem and return run error
-                    }
-                    outFileE.close();*/
-                }
-                else
-                {
-                     std::ifstream oFile(qsubOut);
-                     LOG(ERROR) << "Error submitting job " << tmpBashFileUpper << " to qsub, returning error";
-                     ErrorResponse::setFaultDetail("Error submiting job to qsub. Token:");
-                     ErrorResponse::setFaultDetail(fileName);
-
-                     while (std::getline(oFile, line_from_file))
-                        {
-                            ErrorResponse::setFaultDetail(line_from_file);
-                        }
-                    oFile.close();
-                    //return error (content of the qsubOut)
-                }
-            }
-            else
-            {
-                LOG(ERROR) << "Error getting qsub output file " << qsubOut << " , returning error to the client";
-                ErrorResponse::setFaultDetail("qsub output file not found. Token:");
-                ErrorResponse::setFaultDetail(fileName);
-                //bad qsub output file
-            }
-
-			if (!ErrorResponse::isFaultFound())
-			{
-				LOG(INFO) << "Job SUCESS";
-			}
-			else
-            {
-                //copy input data and bash file to err directory for further inspection
-                LOG(INFO) << "Copying bash and data files to err directory";
-                LOG(INFO) << "Job FAILURE";
-                struct stat st;
-                std::string pathStr(ServiceSettings::workingDirMPI + "err");
-                const char *path = pathStr.c_str();  //ServiceSettings::localDataFileSavePath.c_str() + "\err";
-                stat(path, &st);
-                bool isdir = S_ISDIR(st.st_mode);
-                if (isdir)
-                {
-                    std::string sorce = bashFile;
-                    std::string destination = pathStr + "/_bash_" + fileName + ".sh";
-                    HelperMethods::copyFile(sorce.c_str(), destination.c_str());
-                    sorce = cFile->getFilePath();
-                    destination = pathStr + "/" + cFile->getFileName();
-                    HelperMethods::copyFile(sorce.c_str(), destination.c_str());
-                }//copy files
-            }
-
-            HelperMethods::deleteFile(cFile->getFilePath());
-            HelperMethods::deleteFile(bashFile.c_str());
-            HelperMethods::deleteFile(qsubOut.c_str());
-            HelperMethods::deleteFile(qsubOutO.c_str());
-            HelperMethods::deleteFile(qsubOutE.c_str());
-            HelperMethods::deleteFile(bashFileUpper.c_str());
-
+        LOG(ERROR) << "Unable to start a process for " << ServiceSettings::pathToMPIExecutable << ": " << strerror(errno);
+        ErrorResponse::setFaultDetail("Unable to start the algorithm process. Token: " + runName);
     }
-	else if (ServiceSettings::runDestination == 2) //run on VU MIF cluster
-	{
-	 //creating bash script with the parameters
-        callCalc = ServiceSettings::pathToMPIExecutable + " -wdir " + ServiceSettings::workingDirMPI + " " + ServiceSettings::pathToAlgorithmsExe + exeParams + " -i " +cFile->getFilePath() + " -o " + outFile->getFilePath() + " -s " + statFile->getFilePath();
-
-		std::string fileName = HelperMethods::generateFileName("", false);
-        std::string bashFile = ServiceSettings::workingDirMPI + "_bash_" + fileName + ".sh";
-		std::string qsubOut = ServiceSettings::workingDirMPI + "_slurmSubmit_log_" + fileName + ".txt";
-		std::string qsubOutO = ServiceSettings::workingDirMPI + "_slurmRunOut_log_" + fileName + ".txt";
-        std::string qsubOutE = ServiceSettings::workingDirMPI + "_slurmRunOut_Err_" + fileName + ".txt";
-
-		std::string bashFileUpper = ServiceSettings::workingDirMPI + "_bash_run_" + fileName + ".sh";
-
-		std::ofstream file(bashFile.c_str());
-        file << "#!/bin/bash"<<std::endl;
-        file<<"#SBATCH -p ";
-
-		//according to http://mif.vu.lt/cluster/
-		if (maxCalculationTime <= 2*60*60) //less than 2 hours then put to short queue
-			{
-				file<<"short"<<std::endl;
-				file<<"#SBATCH -C alpha" <<std::endl;
-			}
-		else if ((maxCalculationTime > 2*60*60) && (maxCalculationTime <= 48*60*60))//less than 48 hours then put to short queue
-			{
-				file<<"long"<<std::endl;
-				file<<"#SBATCH -C alpha" <<std::endl;
-			}
-		else if ((maxCalculationTime > 48*60*60) && (maxCalculationTime <= 168*60*60))//less than 7 days then put to short queue
-			{
-				file<<"verylong"<<std::endl;
-				file<<"#SBATCH -C gamma" <<std::endl;
-
-			}
-		else
-			{
-				file<<"extralong"<<std::endl;
-				file<<"#SBATCH -C beta" <<std::endl;
-			}
-
-		file<<"#SBATCH -n "<<reqProcessors<<std::endl;
-        file<<"#$ -o "<< qsubOutO << std::endl;
-        file<<"#$ -e "<< qsubOutE << std::endl;
-        file<<callCalc<<std::endl;
-        file.close();
-
-		std::ofstream fileUpper(bashFileUpper.c_str());
-		if (reqProcessors > 1)
-			fileUpper << "srun true"<<std::endl; //if ve need more than one CPU require them all to be accessible. Otherwise 1CPU becomes accessible minute after minute
-        fileUpper <<"sbatch -D "<<ServiceSettings::workingDirMPI << " -o " << qsubOutO << " -e "<< qsubOutE << " " << bashFile  << " > " <<qsubOut << std::endl;
-        fileUpper.close();
-
-
-		char * tmpBashFileUpper = const_cast<char*>(bashFileUpper.c_str());
-        std::string laik = "chmod 707 " + bashFileUpper;
-        char * command =  const_cast<char*>(laik.c_str());
-        system (command);
-
-		char* argList[] =
-       {
-            tmpBashFileUpper,
-            NULL /*       The argument list must end with a NULL.*/
-        };
-
-        /* Spawn a child process running the command. Ignore the
-           returned child process ID.  */
-        LOG(INFO) << "Submitting job to slurm" << tmpBashFileUpper;
-        spawn (tmpBashFileUpper, argList);
-
-		std::ifstream oFile(qsubOut);
-        std::string line_from_file;
-
-		system("sleep 2");
-		if (oFile.good())
-        {
-			std::getline(oFile, line_from_file);
-            oFile.close();
-
-            std::size_t foundJob = line_from_file.find("Submitted batch job ");
-
-			if (foundJob!=std::string::npos)
-            {                  //find job id
-                    std::size_t foundJobIDStart = line_from_file.find_first_of("0123456789");
-                    std::size_t foundJobIDEnd  = line_from_file.find(" ", foundJobIDStart + 1);
-                    std::string jobID = line_from_file.substr(foundJobIDStart, foundJobIDEnd - foundJobIDStart);
-                    LOG(INFO) << "Job ID is " << jobID;
-
-					//end of calculations indicates either created error file either created calculus result file
-					//thus check for these files and return either error description of link to the result file
-
-					bool stopChecking = false;
-					std::string oF = outFile->getFilePath();
-					std::string sF = statFile->getFilePath();
-
-					do
-					{
-						system ("sleep 5");
-						//checking if there are these files
-						std::ifstream calcFile(oF.c_str());  //output from algorithms
-						std::ifstream statFile(sF.c_str()); //statistics from the calculus
-						std::ifstream slurmError(qsubOutE);
-
-						if (slurmError)
-						{
-							std::streampos current = slurmError.tellg();
-							slurmError.seekg (0, slurmError.end);
-							bool empty = !slurmError.tellg(); // true if empty file
-							slurmError.seekg (current, slurmError.beg); //restore stream position
-
-							if (!empty) //checking if the file is not empty
-							{
-								LOG(ERROR) << "Error while invoking calculus. Error file " << qsubOutE << " has been created with content. Returning content of the file.";
-								ErrorResponse::setFaultDetail("Error while invoking calculus. Token:");
-								ErrorResponse::setFaultDetail(fileName);
-								while (std::getline(slurmError, line_from_file))
-								{
-									ErrorResponse::setFaultDetail(line_from_file);
-								}
-								stopChecking = true;
-							}
-							else if (empty && calcFile && statFile)
-							{
-								stopChecking = true;
-							}
-							/*else
-							{
-								ErrorResponse::setFaultDetail("Got unknown error while trying to mpirun Algorithms");
-							}*/
-						}
-					calcFile.close();
-					statFile.close();
-					slurmError.close();
-					}
-					while (!stopChecking);
-			}
-			else
-			{
-			 std::ifstream oFile(qsubOut);
-             LOG(ERROR) << "Error submitting job " << tmpBashFileUpper << " to slurm, returning error";
-             ErrorResponse::setFaultDetail("Error submitting job to slurm. Token:");
-             ErrorResponse::setFaultDetail(fileName);
-             while (std::getline(oFile, line_from_file))
-               {
-                     ErrorResponse::setFaultDetail(line_from_file);
-               }
-             oFile.close();
-             //return error (content of the _slurmSubmit_log_.txt)
-			}
-		}
-		else
-		{
-			ErrorResponse::setFaultDetail("Error submitting job. Cannot find JOBID. Token:");
-			ErrorResponse::setFaultDetail(fileName);
-		}
-		if (!ErrorResponse::isFaultFound())
-		{
-			LOG(INFO) << "Job finished SUCESSFULY";
-		}
-		else
-            {
-                //copy input data and bash file to err directory for further inspection
-                LOG(INFO) << "Copying bash and data files to err directory";
-                LOG(INFO) << "Job FAILURE";
-                struct stat st;
-                std::string pathStr(ServiceSettings::workingDirMPI + "err");
-                const char *path = pathStr.c_str();  //ServiceSettings::localDataFileSavePath.c_str() + "\err";
-                stat(path, &st);
-                bool isdir = S_ISDIR(st.st_mode);
-                if (isdir)
-                {
-                    std::string sorce = bashFile;
-                    std::string destination = pathStr + "/_bash_" + fileName + ".sh";
-                    HelperMethods::copyFile(sorce.c_str(), destination.c_str());
-                    sorce = cFile->getFilePath();
-                    destination = pathStr + "/" + cFile->getFileName();
-                    HelperMethods::copyFile(sorce.c_str(), destination.c_str());
-                }//copy files
-            }
-
-        HelperMethods::deleteFile(cFile->getFilePath());
-        HelperMethods::deleteFile(bashFile.c_str());
-        HelperMethods::deleteFile(qsubOut.c_str());
-        HelperMethods::deleteFile(qsubOutO.c_str());
-        HelperMethods::deleteFile(qsubOutE.c_str());
-        HelperMethods::deleteFile(bashFileUpper.c_str());
-	}
-
-}
-
-std::string CallCalculus::getOutput(char *command)
-{
-    FILE *pipe = popen(command, "r");
-    if (!pipe) return "ERR";
-    char buffer[128];
-    std::string result = "";
-    //freopen("/home/damis/apache/htdocs/damis/data/test.err", "w", stdout);
-    while (!feof(pipe))
+    else if (timedOut)
     {
-        if (fgets(buffer, 128, pipe)!= NULL)
-            {
-                result +=buffer;
-                break; //found response thus job is still submitted
-            }
+        LOG(ERROR) << "Algorithm run exceeded the time limit of " << ServiceSettings::maxRunTime << " s and was stopped";
+        ErrorResponse::setFaultDetail("Algorithm run exceeded the time limit of " + std::to_string(ServiceSettings::maxRunTime) + " s and was stopped. Token: " + runName);
     }
-    pclose (pipe);
-   // fclose(stdout);
-    return result;
-}
-
-pid_t CallCalculus::spawn(char* program, char** arg_list)
-{
-    pid_t child_pid, endID;
-    /* Duplicate this process. */
-    child_pid = fork();
-
-    int status;
-
-    if (child_pid > 0)
-        /* This is the parent process. */
+    else if (exitCode != 0 || !fileHasContent(outFile->getFilePath()) || !fileHasContent(statFile->getFilePath()))
     {
-        do
-        {
-            //https://support.sas.com/documentation/onlinedoc/sasc/doc/lr2/waitpid.htm
-            endID = waitpid(child_pid, &status, WNOHANG|WUNTRACED); /* wait for child to exit, and store child's exit status */
-            if (endID == -1)
-            {
-                /* error calling waitpid       */
-                LOG(ERROR) << "Error waiting for algorithm run process.";
-                exit(EXIT_FAILURE);
-            }
-             else if (endID == child_pid)
-            {
-                /* child ended                 */
-              /*  if (WIFEXITED(status))
-                  LOG(INFO) <<"Child ended normally. \n";*/
-                if (WIFSIGNALED(status))
-                   // LOG(ERROR) << "Algorithm computation process ended abnormal because of an uncaught signal. \n";
-                   fprintf (stderr, "Algorithm computation process ended abnormal because of an uncaught signal. \n");
-                else if (WIFSTOPPED(status))
-                   //LOG(ERROR) << "Algorithm computation process has stopped abnormal. \n";
-                   fprintf (stderr, "Algorithm computation process has stopped abnormal. \n");
+        std::string output = tailOfFile(runLog, 15);
+        LOG(ERROR) << "Algorithm run failed (exit code " << exitCode << "): " << output;
+        ErrorResponse::setFaultDetail("Algorithm run failed (exit code " + std::to_string(exitCode) + "). Token: " + runName);
+        if (!output.empty())
+            ErrorResponse::setFaultDetail(output);
+    }
 
-              //  exit(EXIT_SUCCESS);
-            }
-           // system("sleep 1");
-        }
-        while (endID == 0);
-
-        return child_pid;
+    if (!ErrorResponse::isFaultFound())
+    {
+        LOG(INFO) << "Job finished SUCCESSFULLY";
     }
     else
     {
-        /* Now execute PROGRAM, searching for it in the path.  */
-       // LOG(INFO) << "Calling qsub: " << program << arg_list;
-
-        int execReturn = execvp (program,  arg_list);
-        //std::cout << program;
-        if(execReturn == -1)
+        //copy input data and run log to err directory for further inspection
+        LOG(INFO) << "Job FAILURE, copying data and log files to err directory";
+        std::string errDir = ServiceSettings::workingDirMPI + "err";
+        struct stat st;
+        if (stat(errDir.c_str(), &st) == 0 && S_ISDIR(st.st_mode))
         {
-
-            //LOG(ERROR)<< "Failure! execve error code = %d. \n" << errno;
-            fprintf (stderr, "Failure! execve error code = %d. \n", errno);
-            std::string err = getErrMsg(errno);
-            fprintf(stderr, err.c_str());
-           //LOG(ERROR) <<  err;
-           // std::cout << getErrMsg(errno) << std::endl;
+            HelperMethods::copyFile(cFile->getFilePath().c_str(), (errDir + "/" + cFile->getFileName()).c_str());
+            HelperMethods::copyFile(runLog.c_str(), (errDir + "/_run_" + runName + ".log").c_str());
         }
-        /* The execvp  function returns only if an error occurs.  */
-        fprintf(stderr, ". An error occurred in execvp.\n");
-        abort();
     }
+
+    HelperMethods::deleteFile(cFile->getFilePath());
+    HelperMethods::deleteFile(runLog);
+    delete cFile;
 }
 
-std::string CallCalculus::getErrMsg(int errnum)
+bool CallCalculus::runProcess(const std::vector<std::string>& args, const std::string& workDir, const std::string& logFile,
+                              int timeoutSec, int& exitCode, bool& timedOut)
 {
+    timedOut = false;
+    exitCode = -1;
 
-    switch ( errnum )
-    {
+    std::vector<char*> argv;
+    for (size_t i = 0; i < args.size(); i++)
+        argv.push_back(const_cast<char*>(args[i].c_str()));
+    argv.push_back(nullptr);
 
-#ifdef EACCES
-    case EACCES :
-    {
-        return "EACCES Permission denied";
-    }
-#endif
+    int logFd = open(logFile.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
 
-#ifdef EPERM
-    case EPERM :
+    pid_t child = fork();
+    if (child < 0)
     {
-        return "EPERM Not super-user";
+        if (logFd >= 0)
+            close(logFd);
+        return false;
     }
-#endif
 
-#ifdef E2BIG
-    case E2BIG :
+    if (child == 0)
     {
-        return "E2BIG Arg list too long";
+        // own process group: on timeout the whole group (mpirun and every rank) is killed
+        setpgid(0, 0);
+        // stdin of the CGI is the SOAP request and stdout is the SOAP response: keep the child away from both
+        int devNull = open("/dev/null", O_RDWR);
+        if (devNull >= 0)
+            dup2(devNull, STDIN_FILENO);
+        int outFd = logFd >= 0 ? logFd : devNull;
+        if (outFd >= 0)
+        {
+            dup2(outFd, STDOUT_FILENO);
+            dup2(outFd, STDERR_FILENO);
+        }
+        if (chdir(workDir.c_str()) != 0)
+            fprintf(stderr, "Unable to change directory to %s: %s\n", workDir.c_str(), strerror(errno));
+        // Apache starts CGI scripts without HOME, mpirun (PRRTE) refuses to run without it
+        const char *home = getenv("HOME");
+        if (!home || !*home)
+            setenv("HOME", "/tmp", 1);
+        const char *tmp = getenv("TMPDIR");
+        if (!tmp || !*tmp)
+            setenv("TMPDIR", "/tmp", 1);
+        execvp(argv[0], argv.data());
+        fprintf(stderr, "Unable to start %s: %s\n", argv[0], strerror(errno));
+        _exit(127);
     }
-#endif
 
-#ifdef ENOEXEC
-    case ENOEXEC :
-    {
-        return "ENOEXEC Exec format error";
-    }
-#endif
+    setpgid(child, child); // also from the parent, avoids a race with the child's own call
+    if (logFd >= 0)
+        close(logFd);
 
-#ifdef EFAULT
-    case EFAULT :
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSec > 0 ? timeoutSec : 0);
+    int status = 0;
+    for (;;)
     {
-        return "EFAULT Bad address";
-    }
-#endif
+        pid_t r = waitpid(child, &status, WNOHANG);
+        if (r == child)
+            break;
+        if (r < 0 && errno != EINTR)
+            return false;
 
-#ifdef ENAMETOOLONG
-    case ENAMETOOLONG :
-    {
-        return "ENAMETOOLONG path name is too long     ";
+        if (timeoutSec > 0 && std::chrono::steady_clock::now() >= deadline)
+        {
+            timedOut = true;
+            kill(-child, SIGTERM);
+            for (int i = 0; i < 50 && waitpid(child, &status, WNOHANG) == 0; i++)
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            kill(-child, SIGKILL);
+            waitpid(child, &status, 0);
+            break;
+        }
+        // the old cluster wait loop polled without sleeping (100 % CPU)
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
-#endif
 
-#ifdef ENOENT
-    case ENOENT :
-    {
-        return "ENOENT No such file or directory";
-    }
-#endif
+    if (WIFEXITED(status))
+        exitCode = WEXITSTATUS(status);
+    else if (WIFSIGNALED(status))
+        exitCode = 128 + WTERMSIG(status);
 
-#ifdef ENOMEM
-    case ENOMEM :
-    {
-        return "ENOMEM Not enough core";
-    }
-#endif
+    return true; // exit code 127 = exec failed, the reason is in the log file
+}
 
-#ifdef ENOTDIR
-    case ENOTDIR :
+std::string CallCalculus::tailOfFile(const std::string& path, size_t maxLines)
+{
+    std::ifstream file(path);
+    std::deque<std::string> lines;
+    std::string line;
+    while (std::getline(file, line))
     {
-        return "ENOTDIR Not a directory";
+        if (line.empty())
+            continue;
+        lines.push_back(line);
+        if (lines.size() > maxLines)
+            lines.pop_front();
     }
-#endif
+    std::string result;
+    for (size_t i = 0; i < lines.size(); i++)
+        result += (i ? "\n" : "") + lines[i];
+    return result;
+}
 
-#ifdef ELOOP
-    case ELOOP :
-    {
-        return "ELOOP Too many symbolic links";
-    }
-#endif
-
-#ifdef ETXTBSY
-    case ETXTBSY :
-    {
-        return "ETXTBSY Text file busy";
-    }
-#endif
-
-#ifdef EIO
-    case EIO :
-    {
-        return "EIO I/O error";
-    }
-#endif
-
-#ifdef ENFILE
-    case ENFILE :
-    {
-        return "ENFILE Too many open files in system";
-    }
-#endif
-
-#ifdef EINVAL
-    case EINVAL :
-    {
-        return "EINVAL Invalid argument";
-    }
-#endif
-
-#ifdef EISDIR
-    case EISDIR :
-    {
-        return "EISDIR Is a directory";
-    }
-#endif
-
-#ifdef ELIBBAD
-    case ELIBBAD :
-    {
-        return "ELIBBAD Accessing a corrupted shared lib";
-    }
-#endif
-
-    default :
-    {
-        std::string errorMsg(strerror(errnum));
-        if ( errnum ) return errorMsg;
-    }
-    }
+bool CallCalculus::fileHasContent(const std::string& path)
+{
+    struct stat st;
+    return stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0;
 }
