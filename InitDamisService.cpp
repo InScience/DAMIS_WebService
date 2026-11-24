@@ -14,7 +14,7 @@
 #include "logging/easylogging++.h"
 #include "ErrorResponse.h"
 #include "ServiceSettings.h"
-#include "curl/curl.h"
+#include <curl/curl.h>
 #include "HelperMethods.h"
 
 
@@ -95,11 +95,27 @@ LOG(INFO) << "Initiating download file";
             /* Switch on full protocol/debug output */
             curl_easy_setopt(curl, CURLOPT_VERBOSE, 0L);
 
+            /* An HTTP status >= 400 is a failed download: the error page is not a dataset (checkForHttpError
+             * only recognises pages containing "404 Not Found") */
+            curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
 
             res = curl_easy_perform(curl);
 
+            long httpStatus = 0;
+            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpStatus);
             curl_easy_cleanup(curl);
 
+            if(CURLE_HTTP_RETURNED_ERROR == res)
+            {
+                LOG(ERROR) << "HTTP error " << httpStatus << " downloading file: " << InitDamisService::getDownloadFileURI();
+                ErrorResponse::setFaultDetail(std::string("File download from ") + InitDamisService::getDownloadFileURI() + std::string(" was not successful, got HTTP error ") + std::to_string(httpStatus));
+                if(ftpfile.stream)
+                {
+                    fclose(ftpfile.stream);
+                    HelperMethods::deleteFile(DamisFile::getFilePath());
+                }
+                return false;
+            }
             if(CURLE_OK != res)
             {
                 LOG(ERROR) << "Error curl was not able to download file: " << InitDamisService::getDownloadFileURI();

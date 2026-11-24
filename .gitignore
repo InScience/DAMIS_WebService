@@ -1,0 +1,5 @@
+# Build output (gSOAP stubs are generated into build/gen)
+/build/
+/DamisService.cgi
+*.o
+*.d

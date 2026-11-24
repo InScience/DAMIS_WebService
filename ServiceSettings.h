@@ -44,9 +44,11 @@ public:
 
 	 static int noOfProcessors; /**< Number of processors that may be used by the algorithms */
 
-	 static int runDestination; /**< Indicates where the algorithms must be run - 1 MII cluster, 2 - VU MIF cluster */
+	 static std::string mpiOptions; /**< Extra mpirun options, whitespace separated (e.g. "--oversubscribe --bind-to none") */
 
-	 static std::string pathToMPIExecutable; /**< Path to mpi.exe or mpiexec.exe */
+	 static int maxRunTime; /**< Seconds after which a running algorithm is killed (keep below the Apache/PHP timeouts) */
+
+	 static std::string pathToMPIExecutable; /**< mpirun executable (name in PATH or full path) */
 
 	 static std::string workingDirMPI; /**< MPI working directory */
 

@@ -10,8 +10,11 @@
 
 #include "ServeRequest.h"
 
+#include <string>
+#include <vector>
 
- /** \brief Class implements call of the algorithms on the cluster
+
+ /** \brief Class implements the call of the algorithms (Algorithms binary started with mpirun on this host)
   *
   */
 
@@ -22,7 +25,7 @@ public:
     /** \brief Class constructor.
      *
      * \param int p number of processors.
-     * \param int maxCalcTime predictive calculation time in seconds.
+     * \param int maxCalcTime predictive calculation time in seconds (informative only).
      * \param InitDamisService* initFile pointer to the InitDamisService object.
      *
      */
@@ -33,41 +36,38 @@ public:
 	virtual ~CallCalculus();
 
 protected:
-    /** \brief Virtual method that calls run algorithm on the cluster
+    /** \brief Runs the algorithm: mpirun [mpiOptions] -np p Algorithms exeParams -i input -o outFile -s statFile
      *
+     * Sets an ErrorResponse fault if the run fails, times out or does not produce the result files.
      * \return void
      */
 	virtual void run();
 
-	std::string exeParams; /**<  Holds passed parameter string to bash script (string will be splitted as argc and argv structure at the service algorithm side) */
+	std::string exeParams; /**<  Holds the algorithm parameters, whitespace separated (e.g. " -al PCA -projType 0 -d 2") */
 private:
 
-    int reqProcessors; /**< Holds required processor count (will be passed to qsub or slurm) */
+    int reqProcessors; /**< Holds required processor count (mpirun -np) */
 
-    int maxCalculationTime; /**< Holds required calculation time (will be passed to qsub or slurm for job sequencing) */
-    /** \brief Function forks the process ant starts new process indicated by keyword program and predefined arqlList
-     *
-     * \param char* program array of chars of the program name
-     * \param char** arg_list aray of crhar array that describes the arguments
-     * \return pid_t child process ID
-     *
-     */
-    pid_t spawn(char* program, char** arg_list);
-    /** \brief Function handles and retruns child process execution errors
-     *
-     * \param int errnum
-     * \return std::string
-     *
-     */
+    int maxCalculationTime; /**< Predictive calculation time passed by the client (was used for cluster queue selection) */
 
-    std::string getErrMsg(int errnum);
-    /** \brief Function gets messages from the pipe
+    /** \brief Starts args[0] with the given arguments in its own process group and waits for it
      *
-     * \param  char* command command to run
-     * \return std::string response from the pipe
-     *
+     * \param args program and its arguments (no shell is involved)
+     * \param workDir working directory of the child process
+     * \param logFile file that receives the child's stdout and stderr
+     * \param timeoutSec kill the whole process group after this many seconds (0 = no limit)
+     * \param exitCode exit code of the child (128 + signal number if it was killed by a signal)
+     * \param timedOut set to true if the child was killed because of the timeout
+     * \return false if the child could not be started
      */
-    std::string getOutput(char* command);
+    static bool runProcess(const std::vector<std::string>& args, const std::string& workDir, const std::string& logFile,
+                           int timeoutSec, int& exitCode, bool& timedOut);
+    /** \brief Returns the last lines of a text file (for error messages)
+     */
+    static std::string tailOfFile(const std::string& path, size_t maxLines);
+    /** \brief true if the file exists and is not empty
+     */
+    static bool fileHasContent(const std::string& path);
 
 };
 

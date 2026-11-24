@@ -43,11 +43,6 @@ public:
       *
       */
 	static int deleteFile(std::string path);
-     /** \brief Parses CGI variables
-      * \return char** of the CGI vars
-      *
-      */
-	static char **getcgivars();
      /** \brief Function splits passed string accordint to passed delimeter
       *
       * \param const std::string& s string to be splitted
@@ -103,31 +98,13 @@ public:
     static int strToInt(std::string cmdParam);
 
     static bool copyFile(const char*, const char*);
+     /** \brief Monotonic wall clock in seconds (for measuring request duration)
+      */
+    static double wallTime();
 
 
 private:
 	static const char* alphanum; /**< Aphanumeric pattern for unique input and output file generation */
-    /** \brief Convert a two-char hex string into the char it represents.
-     *
-     * \param char*  in hex to convert
-     * \return char character
-     *
-     */
-	static char x2c(char* what);
-    /** \brief Reduce any %xx escape sequences to the characters they represent.
-     *
-     * \param char* of escape sequences
-     * \return void
-     *
-     */
-	static void unescape_url(char* url);
-    /** \brief Helper method that adds temination symbol to the end of the string
-     *
-     * \param const char* string to be added
-     * \return char* resulting string
-     *
-     */
-	static char *strdup(const char* s);
     /** \brief Splits vector into strings
      *
      * \param const std::string string to be splitted

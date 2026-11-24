@@ -48,10 +48,12 @@ void ValidateParams::pca(bool projType, double d, int maxCalcTime)
 
     ValidateParams::validateGreatherThan(maxCalcTime, 0, "maxCalcTime", false);
 
+    // projType = true: d is the percentage of variance to keep, otherwise the projection dimension
+    // (as documented in the WSDL, the GUI form and the Algorithms binary; the two checks were swapped)
     if (projType)
-         ValidateParams::validateInterval(d, 1, ValidateParams::inFile->getNumberOfAttributes(), "d");
-    else
         ValidateParams::validateInterval(d, 0, 100, "d", false, true);
+    else
+        ValidateParams::validateInterval(d, 1, ValidateParams::inFile->getNumberOfAttributes(), "d");
 }
 /**
  * Function that checks if smacofMds parameters are OK
@@ -292,13 +294,11 @@ void ValidateParams::filterData(bool retFilteredData, double zValue, int attrInd
 
     ValidateParams::validateGreatherThan(maxCalcTime, 0, "maxCalcTime", false, false);
 
-    int noOfAttr = (ValidateParams::inFile->isClassFound()) ? ValidateParams::inFile->getNumberOfAttributes() + 1 : ValidateParams::inFile->getNumberOfAttributes(); //if there are class add 1 to atrributes
-
     ValidateParams::validateGreatherThan(zValue, 0, "zValue", false, false);
 
-    ValidateParams::validateGreatherThan(attrIndex, 0, "attrIndex", true, false);
-
-    ValidateParams::validateGreatherThan(noOfAttr, attrIndex, "attrIndex > noOfAttr", true, true);
+    // attrIndex is 0-based: the GUI sends the position of the attribute in the file (first = 0).
+    // It used to be treated as 1-based, so the GUI filtered the previous column (first one: index -1).
+    ValidateParams::validateInterval(attrIndex, 0, ValidateParams::inFile->getNumberOfAttributes() - 1, "attrIndex");
 }
 
 /**

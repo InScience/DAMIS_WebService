@@ -34,7 +34,7 @@ void Preprocess::filterData(bool retFilteredData, double zValue, int attrIndex)
 {
     LOG (INFO) << "Initiating filter data function. Got parameters retFilteredData - " << retFilteredData <<" zValue - " << zValue<< " attrIndex - " << attrIndex;
 
-    attrIndex = attrIndex - 1; //clumn indexing starts at 0
+    // attrIndex is 0-based (validated in ValidateParams::filterData)
 
     std::vector<int> exObjIndex;
     int noOfObjects = serveFile->getNumberOfObjects();
@@ -42,17 +42,19 @@ void Preprocess::filterData(bool retFilteredData, double zValue, int attrIndex)
 
     ServeRequest::tmpDataVector.reserve(noOfObjects);
 
-    //double mean = 0;
+    double mean = 0;
     double stdev = 0;
 
     for (int j = 0; j < noOfObjects; j++)
         ServeRequest::tmpDataVector.push_back(serveFile->getDoubleDataAt(j, attrIndex));
 
-    //mean = HelperMethods::getMean(DamisService::tmpDataVector);
+    mean = HelperMethods::getMean(ServeRequest::tmpDataVector);
     stdev = HelperMethods::getStd(ServeRequest::tmpDataVector); //daliname is N o ne is N-1
 
+    // outlier: further than zValue standard deviations from the mean (the mean used to be missing,
+    // so with e.g. values around 5 and stdev 0.8 nearly every object was an outlier)
     for (int i = 0; i < noOfObjects; i++)
-        if (fabs(ServeRequest::tmpDataVector.at(i)) > zValue * stdev)
+        if (fabs(ServeRequest::tmpDataVector.at(i) - mean) > zValue * stdev)
             exObjIndex.push_back(i);
 
     ServeRequest::tmpDataVector.clear();
