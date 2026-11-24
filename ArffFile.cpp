@@ -127,6 +127,9 @@ bool ArffFile::readArffFile()
     {
         while (std::getline(file, line_from_file))
         {
+            // CRLF files: without this an empty line ("\r") was read as a data line with one value
+            if (!line_from_file.empty() && line_from_file.back() == '\r')
+                line_from_file.pop_back();
             if (line_from_file.length() == 0)
             {
                 line_no++;
@@ -135,7 +138,8 @@ bool ArffFile::readArffFile()
             std::istringstream iss(line_from_file);
             std::string sub;
             iss >> sub;
-            if (sub == "%")
+            // whitespace-only line or comment (% at the start of the first word)
+            if (sub.empty() || sub[0] == '%')
             {
                 line_no++;
                 continue;
@@ -204,12 +208,6 @@ bool ArffFile::readArffFile()
                     tmp = HelperMethods::split(line_from_file, ','); //split data section by comma
 
                     int noOfAttr = (ArffFile::isClassFound()) ? ArffFile::getNumberOfAttributes() + 1 : ArffFile::getNumberOfAttributes(); //if there are class add 1 to atrributes
-
-                    // strip \r (CRLF files) from the last value - only when the line has the expected number of
-                    // values: tmp[noOfAttr-1] used to be read before that check, so a file without attributes or a
-                    // short line read outside the vector and crashed the service (std::bad_alloc, HTTP 500)
-                    if (noOfAttr > 0 && tmp.size() == (size_t) noOfAttr)
-                        tmp[noOfAttr-1].erase(std::remove(tmp[noOfAttr-1].begin(), tmp[noOfAttr-1].end(), '\r'), tmp[noOfAttr-1].end());
 
                     if (tmp.size() == noOfAttr)
                     {

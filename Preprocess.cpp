@@ -12,6 +12,7 @@
 #include "Preprocess.h"
 #include "HelperMethods.h"
 #include <math.h>
+#include <algorithm>
 #include <numeric>
 #include "logging/easylogging++.h"
 
@@ -155,8 +156,10 @@ void Preprocess::splitData(bool reshufleObjects,double firstSubsetPerc, double s
     int firstCount = ceil(firstSubsetPerc / 100.0 * objNo);  //qtt of vectors in first set
     int secondCount = ceil(secondSubsetPerc / 100.0 * objNo);                //qtt of vectors in second set
 
-    if ((firstCount + secondCount) > objNo)
-            secondCount -= objNo - (firstCount + secondCount);
+    // both counts are rounded up (80/20 of 6 objects = 5 + 2): the second subset gets what is left. This
+    // used to add the excess instead of removing it and read past the last object (vector::_M_range_check)
+    firstCount = std::min(firstCount, objNo);
+    secondCount = std::min(secondCount, objNo - firstCount);
 
   //  ServeRequest::writeData.resize(firstCount, ServeRequest::tmpDataVector);
    // Preprocess::writeClass.resize(firstCount);
